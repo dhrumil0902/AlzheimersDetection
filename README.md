@@ -1,2 +1,2 @@
 # AlzheimersDetection
-Capstone project (2024 -2025), using EEG brain signals to detect if someone has Alzheimer's. Can be useful for early detection of Alzheimer's.
+Capstone Project (2024-2025): This project involves using EEG brain signals to detect if an individual has Alzheimer's. The goal is to aid in the early detection of Alzheimer's disease. A neural network will be developed and trained for this purpose. Please check the draft proposal above.
