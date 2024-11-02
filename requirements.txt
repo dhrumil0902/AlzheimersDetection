@@ -3,3 +3,4 @@ torch==2.5.1
 numpy==2.1.2
 scikit-learn==1.5.2
 pandas==2.2.3
+pywavelets==1.7.0

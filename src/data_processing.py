@@ -1,12 +1,15 @@
 import os
 import pandas as pd
+import numpy as np
 from mne.io import read_epochs_eeglab
+import pywt
 
 #IMPORTANT: run from root folder of repo so that cwd is AlzheimersDetection/
 
 DATA_PATH = "data/eeg_files_notch60_50_split5_12"
 LABEL_PATH = "data/participants.tsv"
 SAMPLING_FREQUENCY_HZ = 500
+SAMPLING_PERIOD_SECONDS = 1 / SAMPLING_FREQUENCY_HZ
 EPOCH_LENGTH_SECONDS = 12
 EPOCH_LENGTH_SAMPLES = EPOCH_LENGTH_SECONDS * SAMPLING_FREQUENCY_HZ
 N_CHANNELS = 19
@@ -17,7 +20,18 @@ N_CN = 29
 N_EPOCHS = 5
 N_SEGMENTS = 6
 SEGMENT_LENGTH_SAMPLES = int(EPOCH_LENGTH_SAMPLES / N_SEGMENTS)
+ALPHA_FREQUENCIES = (2, 8, 0.1)
+GAMMA_FREQUENCIES = (30, 120, 1)
+CWT_B = 6
+CWT_C = 0.8125
+N_ALPHA = int((ALPHA_FREQUENCIES[1] - ALPHA_FREQUENCIES[0]) / ALPHA_FREQUENCIES[2])
+N_GAMMA = int((GAMMA_FREQUENCIES[1] - GAMMA_FREQUENCIES[0]) / GAMMA_FREQUENCIES[2])
 
+
+def get_cwt_scales(min_freq, max_freq, step_size):
+    frequencies = np.arange(min_freq, max_freq, step_size)
+    scales = 1 / (frequencies * SAMPLING_PERIOD_SECONDS)
+    return scales
 
 def get_subject_group(subject_str):
     participant_id = "sub-" + subject_str
@@ -27,8 +41,12 @@ def get_subject_group(subject_str):
     return participant_row['Group'].values[0]
 
 def main():
-    ad_cn_count = 0
-    segment_count = 0
+    #ad_cn_count = 0
+    #segment_count = 0
+
+    alpha_scales = get_cwt_scales(ALPHA_FREQUENCIES[0], ALPHA_FREQUENCIES[1], ALPHA_FREQUENCIES[2])
+    gamma_scales = get_cwt_scales(GAMMA_FREQUENCIES[0], GAMMA_FREQUENCIES[1], GAMMA_FREQUENCIES[2])
+    cwt_scales = np.concatenate((alpha_scales, gamma_scales))
 
     for subject_id in range(1, N_SUBJECTS + 1):
         subject_str = f"{subject_id:03}"
@@ -37,7 +55,7 @@ def main():
         if get_subject_group(subject_str) == "F":
             continue
 
-        ad_cn_count += 1
+        #ad_cn_count += 1
         dataset_path = os.path.join(DATA_PATH, f"split-{subject_str}.set")
         epochs = read_epochs_eeglab(dataset_path)
 
@@ -49,12 +67,28 @@ def main():
                 start_sample = segment_id * SEGMENT_LENGTH_SAMPLES
                 end_sample = start_sample + SEGMENT_LENGTH_SAMPLES #exclusive
                 segment = epoch[:, start_sample:end_sample]
+                #segment_count += 1
 
-                #TODO: do something with the segment
-                segment_count += 1
+                for channel_id in range(N_CHANNELS):
+                    segment_channel = segment[channel_id, :]
+
+                    #calculate W(s, t) matrix
+                    coefs, freqs = pywt.cwt(segment_channel, cwt_scales, f"cmor{CWT_B}-{CWT_C}", sampling_period=SAMPLING_PERIOD_SECONDS)
+                    
+                    #extract alpha freq phases
+                    alpha_coefs = coefs[0:N_ALPHA, :]
+                    phases = np.angle(alpha_coefs)
+
+                    #extract gamma freq amplitudes
+                    gamma_coefs = coefs[N_ALPHA:, :]
+                    amplitudes = np.abs(gamma_coefs)
+                    break
+                break
+            break
+        break
     
-    assert(ad_cn_count == N_AD + N_CN)
-    assert(segment_count == ad_cn_count * N_EPOCHS * N_SEGMENTS)
+    #assert(ad_cn_count == N_AD + N_CN)
+    #assert(segment_count == ad_cn_count * N_EPOCHS * N_SEGMENTS)
 
 if __name__ == "__main__":
     main()
