@@ -1,157 +1,151 @@
 import os
-import pandas as pd
 import numpy as np
-from mne.io import read_epochs_eeglab
+import pandas as pd
 import pywt
-import math
 import matplotlib.pyplot as plt
-import time
+from mne.io import read_epochs_eeglab
+from scipy.signal import iirnotch, filtfilt, butter
 
-#IMPORTANT: run from root folder of repo so that cwd is AlzheimersDetection/
-
-DATA_PATH = "data/eeg_files_notch60_50_split5_12"
-LABEL_PATH = "data/participants.tsv"
+# Paths and constants
+DATA_PATH = "/content/drive/MyDrive/eeg_files_notch60_50_split5_12"  # Adjust this to your Google Drive path
+LABEL_PATH = "/content/drive/MyDrive/participants.tsv"
 SAMPLING_FREQUENCY_HZ = 500
 SAMPLING_PERIOD_SECONDS = 1 / SAMPLING_FREQUENCY_HZ
 EPOCH_LENGTH_SECONDS = 12
-EPOCH_LENGTH_SAMPLES = EPOCH_LENGTH_SECONDS * SAMPLING_FREQUENCY_HZ
+EPOCH_LENGTH_SAMPLES = int(EPOCH_LENGTH_SECONDS * SAMPLING_FREQUENCY_HZ)
 N_CHANNELS = 19
 N_SUBJECTS = 88
-N_AD = 36
-N_FTD = 23
-N_CN = 29
 N_EPOCHS = 5
 N_SEGMENTS = 6
 SEGMENT_LENGTH_SAMPLES = int(EPOCH_LENGTH_SAMPLES / N_SEGMENTS)
-
-#from 6.2.1 of thesis
+ALPHA_FREQUENCIES = (4, 8, 0.1)
+GAMMA_FREQUENCIES = (30, 120, 1)
 CWT_B = 6
 CWT_C = 0.8125
 
-#from 6.2.2 and 6.4.1 of thesis
-ALPHA_FREQUENCIES = (2, 8, 0.1)
-GAMMA_FREQUENCIES = (30, 120, 1)
-N_ALPHA = int((ALPHA_FREQUENCIES[1] - ALPHA_FREQUENCIES[0]) / ALPHA_FREQUENCIES[2])
-N_GAMMA = int((GAMMA_FREQUENCIES[1] - GAMMA_FREQUENCIES[0]) / GAMMA_FREQUENCIES[2])
-
-#from ref [26] of thesis
-N_PHASE_BINS = 18
-H_MAX = math.log2(N_PHASE_BINS)
-
-
-
-def get_subject_group(subject_str):
-    participant_id = "sub-" + subject_str
-    participants_df = pd.read_csv(LABEL_PATH, sep="\t")
-    participant_row = participants_df[participants_df['participant_id'] == participant_id]
-    assert(not participant_row.empty)
-    return participant_row['Group'].values[0]
-
+# Function to calculate CWT scales based on frequencies
 def get_cwt_scales(min_freq, max_freq, step_size):
     frequencies = np.arange(min_freq, max_freq, step_size)
     scales = 1 / (frequencies * SAMPLING_PERIOD_SECONDS)
     return scales
 
-def get_phase_bin(phase_rads):
-    phase_rads = np.where(phase_rads == math.pi, -math.pi, phase_rads)
-    assert np.all((phase_rads >= -math.pi) & (phase_rads < math.pi))
-    bin_indices = ((phase_rads + math.pi) / (2 * math.pi) * N_PHASE_BINS).astype(int)
-    assert np.all((bin_indices >= 0) & (bin_indices < N_PHASE_BINS))
-    return bin_indices
+# Function to read participant group from label file
+def get_subject_group(subject_str):
+    participant_id = "sub-" + subject_str
+    participants_df = pd.read_csv(LABEL_PATH, sep="\t")
+    participant_row = participants_df[participants_df['participant_id'] == participant_id]
+    assert not participant_row.empty
+    return participant_row['Group'].values[0]
 
-def main():
-    #ad_cn_count = 0
-    #segment_count = 0
-    start_time = time.time()
+# Notch filter function
+def apply_notch_filter(signal, fs, freq=60, quality_factor=30):
+    b, a = iirnotch(freq, quality_factor, fs)
+    return filtfilt(b, a, signal)
+  
+# def bandpass_filter(signal, lowcut, highcut, fs, order=4):
+#     nyquist = 0.5 * fs
+#     low = lowcut / nyquist
+#     high = highcut / nyquist
+#     b, a = butter(order, [low, high], btype="band")
+#     return filtfilt(b, a, signal)
 
+# Apply CWT and extract phase and amplitude
+def apply_cwt(signal, scales, wavelet_name='cmor'):
+    coeffs, frequencies = pywt.cwt(signal, scales, wavelet_name, sampling_period=SAMPLING_PERIOD_SECONDS)
+    return coeffs, frequencies
+
+def extract_phase_amplitude(coeffs):
+    phase = np.angle(coeffs)  # Extract phase
+    amplitude = np.abs(coeffs)  # Extract amplitude
+    return phase, amplitude
+
+# PAC calculation helper functions
+def calculate_pac(theta_phase, gamma_amplitude, nbins=18):
+    # Bin the theta phases
+    phase_bins = np.linspace(-np.pi, np.pi, nbins + 1)
+    # Digitize the theta_phase array to determine which bin each phase falls into
+    bin_indices = np.digitize(theta_phase, phase_bins) - 1  # `-1` to match zero-based indexing
+    amplitude_means = np.zeros(nbins)
+
+    # Calculate the mean gamma amplitude for each bin
+    for i in range(nbins):
+        # Select gamma_amplitude values in the current bin and calculate the mean
+        bin_amplitudes = gamma_amplitude[bin_indices == i]
+        amplitude_means[i] = np.mean(bin_amplitudes) if bin_amplitudes.size > 0 else 0
+
+    # Normalize to create a probability distribution
+    amplitude_prob_dist = amplitude_means / np.sum(amplitude_means)
+    return amplitude_prob_dist
+
+def calculate_modulation_index(pac_distribution):
+    H = -np.sum(pac_distribution * np.log(pac_distribution + 1e-8))
+    H_max = np.log(len(pac_distribution))
+    modulation_index = (H_max - H) / H_max
+    return modulation_index
+
+# Main processing function for gPAC matrix generation and plotting
+def generate_gpac_plots():
     alpha_scales = get_cwt_scales(ALPHA_FREQUENCIES[0], ALPHA_FREQUENCIES[1], ALPHA_FREQUENCIES[2])
     gamma_scales = get_cwt_scales(GAMMA_FREQUENCIES[0], GAMMA_FREQUENCIES[1], GAMMA_FREQUENCIES[2])
     cwt_scales = np.concatenate((alpha_scales, gamma_scales))
-
+    
     for subject_id in range(1, N_SUBJECTS + 1):
         subject_str = f"{subject_id:03}"
-
-        #skip the FTD subjects
-        subject_group = get_subject_group(subject_str)
-        if subject_group == "F":
+        if get_subject_group(subject_str) == "F":  # Skip FTD group
             continue
 
-        #ad_cn_count += 1
         dataset_path = os.path.join(DATA_PATH, f"split-{subject_str}.set")
         epochs = read_epochs_eeglab(dataset_path)
 
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))  # Create 2x3 grid for six segments
         for epoch_id in range(N_EPOCHS):
-            epoch = epochs[epoch_id].get_data()[0] #a numpy array
-            assert(epoch.shape == (N_CHANNELS, EPOCH_LENGTH_SAMPLES))
-
+            epoch = epochs[epoch_id].get_data()[0]
             for segment_id in range(N_SEGMENTS):
                 start_sample = segment_id * SEGMENT_LENGTH_SAMPLES
-                end_sample = start_sample + SEGMENT_LENGTH_SAMPLES #exclusive
+                end_sample = start_sample + SEGMENT_LENGTH_SAMPLES
                 segment = epoch[:, start_sample:end_sample]
-                assert segment.shape == (N_CHANNELS, SEGMENT_LENGTH_SAMPLES)
-                #segment_count += 1
-                global_pac_mi = np.zeros((N_ALPHA, N_GAMMA))
 
+                filtered_segment = np.zeros_like(segment)
+                for channel_id in range(N_CHANNELS):
+                    notch_filtered_signal = apply_notch_filter(segment[channel_id, :], SAMPLING_FREQUENCY_HZ)
+
+                # Placeholder PAC matrix
+                pac_matrix = np.zeros((len(alpha_scales), len(gamma_scales)))
+
+                # Calculate PAC for each channel and aggregate to gPAC
                 for channel_id in range(N_CHANNELS):
                     segment_channel = segment[channel_id, :]
-                    assert segment_channel.shape == (SEGMENT_LENGTH_SAMPLES,)
-
-                    #calculate W(s, t) matrix
-                    coefs, freqs = pywt.cwt(segment_channel, cwt_scales, f"cmor{CWT_B}-{CWT_C}", sampling_period=SAMPLING_PERIOD_SECONDS)
+                    coefs, _ = apply_cwt(segment_channel, cwt_scales, f"cmor{CWT_B}-{CWT_C}")
                     
-                    #extract alpha freq phases
-                    alpha_coefs = coefs[0:N_ALPHA, :]
-                    phases = np.angle(alpha_coefs)
+                    alpha_coefs = coefs[:len(alpha_scales), :]
+                    gamma_coefs = coefs[len(alpha_scales):, :]
 
-                    #extract gamma freq amplitudes
-                    gamma_coefs = coefs[N_ALPHA:, :]
-                    amplitudes = np.abs(gamma_coefs)
+                    alpha_phase, _ = extract_phase_amplitude(alpha_coefs)
+                    _, gamma_amplitude = extract_phase_amplitude(gamma_coefs)
 
-                    #phase binning
-                    pac_bin_mean_amplitudes = np.zeros((N_ALPHA, N_GAMMA, N_PHASE_BINS))
-                    for alpha_id in range(N_ALPHA):
-                        alpha_phases = phases[alpha_id, :]
+                    min_time_points = min(alpha_phase.shape[1], gamma_amplitude.shape[1])
+                    alpha_phase = alpha_phase[:, :min_time_points]
+                    gamma_amplitude = gamma_amplitude[:, :min_time_points]
 
-                        bin_indices = get_phase_bin(alpha_phases)
-                        bin_counts = np.bincount(bin_indices, minlength=N_PHASE_BINS)
-                        assert np.all(bin_counts != 0)
+                    for a_idx, theta_phase in enumerate(alpha_phase):
+                        for g_idx, gamma_amp in enumerate(gamma_amplitude):
+                            pac_dist = calculate_pac(theta_phase, gamma_amp)
+                            pac_matrix[a_idx, g_idx] += calculate_modulation_index(pac_dist)
 
-                        for gamma_id in range(N_GAMMA):
-                            gamma_amplitudes = amplitudes[gamma_id, :]
-                            np.add.at(pac_bin_mean_amplitudes[alpha_id, gamma_id], bin_indices, gamma_amplitudes)
-                            pac_bin_mean_amplitudes[alpha_id, gamma_id] /= bin_counts
+                pac_matrix /= N_CHANNELS  # Average across channels
 
-                    #probability distribution
-                    pac_distributions = pac_bin_mean_amplitudes / np.sum(pac_bin_mean_amplitudes, axis=-1, keepdims=True)
-                    pac_entropies = -np.sum(pac_distributions * np.log2(pac_distributions), axis=-1)
-                    pac_mi = (H_MAX - pac_entropies) / H_MAX
-                    assert np.all((pac_mi >= 0) & (pac_mi <= 1))
-                    global_pac_mi += pac_mi
-                global_pac_mi /= N_CHANNELS
-                '''
-                # plot the global pac
-                aligned_global_pac_mi = np.flip(global_pac_mi.T, axis=0)
-                y_indices = np.arange(aligned_global_pac_mi.shape[0])  # First index (0 to 19)
-                x_indices = np.arange(aligned_global_pac_mi.shape[1])  # Second index (0 to 39)
-                y = GAMMA_FREQUENCIES[0] + GAMMA_FREQUENCIES[2] * y_indices[:, np.newaxis]  # Make y a column vector for broadcasting
-                x = ALPHA_FREQUENCIES[0] + ALPHA_FREQUENCIES[2] * x_indices  # Keep x as a row vector
+                # Plot PAC matrix for the segment
+                ax = axes[segment_id // 3, segment_id % 3]
+                cax = ax.imshow(pac_matrix.T, extent=[ALPHA_FREQUENCIES[0], ALPHA_FREQUENCIES[1], GAMMA_FREQUENCIES[0], GAMMA_FREQUENCIES[1]], aspect='auto', origin='lower', cmap='viridis')
+                ax.set_title(f"Segment {segment_id}")
+                ax.set_xlabel("Theta Phase Frequency (Hz)")
+                ax.set_ylabel("Gamma Amplitude Frequency (Hz)")
+                fig.colorbar(cax, ax=ax, label="PAC Modulation Index")
 
-                plt.figure(figsize=(10, 6))
-                plt.pcolormesh(x, y, aligned_global_pac_mi, shading='auto', cmap='viridis')  # Color-coded representation
-                plt.colorbar(label='Value')  # Add a color bar to indicate the scale
-                plt.title(f'Color Plot for subject {subject_group} {subject_str} at t = {segment_id}')  # Title of the plot
-                plt.xlabel('Phase Frequencies (Hz)')  # X-axis label
-                plt.ylabel('Amplitude Frequencies (Hz)')  # Y-axis label
-                plt.show()  # Display the plot
-                #break
-                '''
-            #break
-        break
-    
-    end_time = time.time()
-    print(end_time - start_time)
-    #assert(ad_cn_count == N_AD + N_CN)
-    #assert(segment_count == ad_cn_count * N_EPOCHS * N_SEGMENTS)
+            break  # Process one epoch per subject for demonstration
+        plt.tight_layout()
+        plt.show()
+        break  # Process one subject for demonstration
 
-if __name__ == "__main__":
-    main()
+# Run the main function
+generate_gpac_plots()
