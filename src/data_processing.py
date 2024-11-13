@@ -1,48 +1,20 @@
 import os
+import json
 import pandas as pd
 import numpy as np
-from mne.io import read_epochs_eeglab
+import mne
 import pywt
 import math
 import matplotlib.pyplot as plt
 import time
+from constants import *
 
 #IMPORTANT: run from root folder of repo so that cwd is AlzheimersDetection/
-
-DATA_PATH = "data/eeg_files_notch60_50_split5_12"
-LABEL_PATH = "data/participants.tsv"
-SAMPLING_FREQUENCY_HZ = 500
-SAMPLING_PERIOD_SECONDS = 1 / SAMPLING_FREQUENCY_HZ
-EPOCH_LENGTH_SECONDS = 12
-EPOCH_LENGTH_SAMPLES = EPOCH_LENGTH_SECONDS * SAMPLING_FREQUENCY_HZ
-N_CHANNELS = 19
-N_SUBJECTS = 88
-N_AD = 36
-N_FTD = 23
-N_CN = 29
-N_EPOCHS = 5
-N_SEGMENTS = 6
-SEGMENT_LENGTH_SAMPLES = int(EPOCH_LENGTH_SAMPLES / N_SEGMENTS)
-
-#from 6.2.1 of thesis
-CWT_B = 6
-CWT_C = 0.8125
-
-#from 6.2.2 and 6.4.1 of thesis
-ALPHA_FREQUENCIES = (2, 8, 0.1)
-GAMMA_FREQUENCIES = (30, 120, 1)
-N_ALPHA = int((ALPHA_FREQUENCIES[1] - ALPHA_FREQUENCIES[0]) / ALPHA_FREQUENCIES[2])
-N_GAMMA = int((GAMMA_FREQUENCIES[1] - GAMMA_FREQUENCIES[0]) / GAMMA_FREQUENCIES[2])
-
-#from ref [26] of thesis
-N_PHASE_BINS = 18
-H_MAX = math.log2(N_PHASE_BINS)
-
-
+label_path = "data/participants.tsv"
 
 def get_subject_group(subject_str):
     participant_id = "sub-" + subject_str
-    participants_df = pd.read_csv(LABEL_PATH, sep="\t")
+    participants_df = pd.read_csv(label_path, sep="\t")
     participant_row = participants_df[participants_df['participant_id'] == participant_id]
     assert(not participant_row.empty)
     return participant_row['Group'].values[0]
@@ -60,15 +32,13 @@ def get_phase_bin(phase_rads):
     return bin_indices
 
 def main():
-    #ad_cn_count = 0
-    #segment_count = 0
     start_time = time.time()
 
     alpha_scales = get_cwt_scales(ALPHA_FREQUENCIES[0], ALPHA_FREQUENCIES[1], ALPHA_FREQUENCIES[2])
     gamma_scales = get_cwt_scales(GAMMA_FREQUENCIES[0], GAMMA_FREQUENCIES[1], GAMMA_FREQUENCIES[2])
     cwt_scales = np.concatenate((alpha_scales, gamma_scales))
-
-    for subject_id in range(1, N_SUBJECTS + 1):
+    
+    for subject_id in range(12, N_SUBJECTS + 1):
         subject_str = f"{subject_id:03}"
 
         #skip the FTD subjects
@@ -76,14 +46,28 @@ def main():
         if subject_group == "F":
             continue
 
-        #ad_cn_count += 1
-        dataset_path = os.path.join(DATA_PATH, f"split-{subject_str}.set")
-        epochs = read_epochs_eeglab(dataset_path)
+        subject_path = f"../data/eeg_files_unfilteredd/sub-{subject_str}_task-eyesclosed_eeg.set"
+        json_path = f"../data/ds004504/sub-{subject_str}/eeg/sub-{subject_str}_task-eyesclosed_eeg.json"
+        
+        json_file =  open(json_path, 'r');
+        json_data = json.load(json_file)
+        recording_duration = json_data.get("RecordingDuration")
+        subject_raw = mne.io.read_raw_eeglab(subject_path, preload=True)
+
+        #notch filter
+        subject_raw.notch_filter(freqs=60)
+
+        subject_data = subject_raw.get_data()
+        assert(subject_data.shape == (N_CHANNELS, int(SAMPLING_FREQUENCY_HZ * recording_duration)))
+
+        d_start_time_sec = (recording_duration - EPOCH_LENGTH_SECONDS) / (N_EPOCHS - 1)
+        d_start_sample = int(d_start_time_sec * SAMPLING_FREQUENCY_HZ)
 
         for epoch_id in range(N_EPOCHS):
-            epoch = epochs[epoch_id].get_data()[0] #a numpy array
+            start_sample = epoch_id * d_start_sample
+            epoch = subject_data[:, start_sample : (start_sample + EPOCH_LENGTH_SAMPLES)]
             assert(epoch.shape == (N_CHANNELS, EPOCH_LENGTH_SAMPLES))
-
+            
             for segment_id in range(N_SEGMENTS):
                 start_sample = segment_id * SEGMENT_LENGTH_SAMPLES
                 end_sample = start_sample + SEGMENT_LENGTH_SAMPLES #exclusive
@@ -128,7 +112,7 @@ def main():
                     assert np.all((pac_mi >= 0) & (pac_mi <= 1))
                     global_pac_mi += pac_mi
                 global_pac_mi /= N_CHANNELS
-                '''
+                
                 # plot the global pac
                 aligned_global_pac_mi = np.flip(global_pac_mi.T, axis=0)
                 y_indices = np.arange(aligned_global_pac_mi.shape[0])  # First index (0 to 19)
@@ -143,9 +127,9 @@ def main():
                 plt.xlabel('Phase Frequencies (Hz)')  # X-axis label
                 plt.ylabel('Amplitude Frequencies (Hz)')  # Y-axis label
                 plt.show()  # Display the plot
-                #break
-                '''
-            #break
+                break
+                
+            break
         break
     
     end_time = time.time()
