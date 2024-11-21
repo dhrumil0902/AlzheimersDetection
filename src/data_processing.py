@@ -42,11 +42,11 @@ def main():
         subject_str = f"{subject_id:03}"
 
         #skip the FTD subjects
-        subject_group = get_subject_group(subject_str)
+        subject_group = get_subject_group(subject_str) #A alzheimer, C healthy, F dontcare
         if subject_group == "F":
             continue
 
-        subject_path = f"../data/eeg_files_unfilteredd/sub-{subject_str}_task-eyesclosed_eeg.set"
+        subject_path = f"../data/eeg_files_unfiltered/sub-{subject_str}_task-eyesclosed_eeg.set"
         json_path = f"../data/ds004504/sub-{subject_str}/eeg/sub-{subject_str}_task-eyesclosed_eeg.json"
         
         json_file =  open(json_path, 'r');
@@ -55,16 +55,30 @@ def main():
         subject_raw = mne.io.read_raw_eeglab(subject_path, preload=True)
 
         #notch filter
-        subject_raw.notch_filter(freqs=60)
+        #subject_raw.notch_filter(freqs=60)
 
         subject_data = subject_raw.get_data()
         assert(subject_data.shape == (N_CHANNELS, int(SAMPLING_FREQUENCY_HZ * recording_duration)))
 
-        d_start_time_sec = (recording_duration - EPOCH_LENGTH_SECONDS) / (N_EPOCHS - 1)
-        d_start_sample = int(d_start_time_sec * SAMPLING_FREQUENCY_HZ)
+        '''
+        #plot subject data to determine how much start/end padding to use
+        t = np.linspace(0, 8, 8 * SAMPLING_FREQUENCY_HZ)
+        plt.figure(figsize=(10, 4))  # Optional: Set the figure size
+        plt.plot(t, subject_data[0][:8*SAMPLING_FREQUENCY_HZ], label="Signal")
+        plt.title(f"1D Signal {recording_duration}")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Amplitude")
+        plt.legend()  # Show legend
+        plt.grid(True)  # Add grid for better readability
+        plt.show()
+        continue
+        '''
+
+        d_epoch_start_time_sec = (recording_duration - 2 * SUBJECT_PADDING_LENGTH_SECONDS - EPOCH_LENGTH_SECONDS) / (N_EPOCHS - 1)
+        d_epoch_start_time_sample = int(d_epoch_start_time_sec * SAMPLING_FREQUENCY_HZ)
 
         for epoch_id in range(N_EPOCHS):
-            start_sample = epoch_id * d_start_sample
+            start_sample = SUBJECT_PADDING_LENGTH_SAMPLES + epoch_id * d_epoch_start_time_sample
             epoch = subject_data[:, start_sample : (start_sample + EPOCH_LENGTH_SAMPLES)]
             assert(epoch.shape == (N_CHANNELS, EPOCH_LENGTH_SAMPLES))
             
@@ -73,7 +87,6 @@ def main():
                 end_sample = start_sample + SEGMENT_LENGTH_SAMPLES #exclusive
                 segment = epoch[:, start_sample:end_sample]
                 assert segment.shape == (N_CHANNELS, SEGMENT_LENGTH_SAMPLES)
-                #segment_count += 1
                 global_pac_mi = np.zeros((N_ALPHA, N_GAMMA))
 
                 for channel_id in range(N_CHANNELS):
@@ -82,14 +95,58 @@ def main():
 
                     #calculate W(s, t) matrix
                     coefs, freqs = pywt.cwt(segment_channel, cwt_scales, f"cmor{CWT_B}-{CWT_C}", sampling_period=SAMPLING_PERIOD_SECONDS)
+                    #coefs, freqs = pywt.cwt(segment_channel, cwt_scales, f"cmor{CWT_B}-{CWT_C}")
                     
                     #extract alpha freq phases
                     alpha_coefs = coefs[0:N_ALPHA, :]
+                    #alpha_coefs, _ = pywt.cwt(data=segment_channel, scales=alpha_scales, wavelet=f"cmor{CWT_B}-{CWT_C}")
                     phases = np.angle(alpha_coefs)
 
                     #extract gamma freq amplitudes
                     gamma_coefs = coefs[N_ALPHA:, :]
+                    #gamma_coefs, _ = pywt.cwt(data=segment_channel, scales=gamma_scales, wavelet=f"cmor{CWT_B}-{CWT_C}")
                     amplitudes = np.abs(gamma_coefs)
+
+                    '''
+                    # Create the figure
+                    plt.figure(figsize=(12, 12))
+                    # Plot the signal
+                    t = np.linspace(0, int(SEGMENT_LENGTH_SAMPLES/SAMPLING_FREQUENCY_HZ), SEGMENT_LENGTH_SAMPLES)
+                    plt.subplot(3, 1, 1)
+                    plt.plot(t, segment_channel, label="Signal", color='blue')
+                    plt.title("Signal")
+                    plt.xlabel("Time (s)")
+                    plt.ylabel("Amplitude")
+                    plt.legend()
+                    plt.grid(True)
+                    # Plot the alpha coefficients heatmap
+                    plt.subplot(3, 1, 2)
+                    plt.imshow(
+                        np.abs(alpha_coefs), 
+                        aspect='auto', 
+                        cmap='viridis', 
+                        extent=[t[0], t[-1], N_ALPHA, 0]
+                    )
+                    plt.colorbar(label="Magnitude")
+                    plt.title("Alpha Coefficients Heatmap")
+                    plt.xlabel("Time (s)")
+                    plt.ylabel("Scale")
+                    # Plot the gamma coefficients heatmap
+                    plt.subplot(3, 1, 3)
+                    plt.imshow(
+                        np.abs(gamma_coefs), 
+                        aspect='auto', 
+                        cmap='viridis', 
+                        extent=[t[0], t[-1], len(cwt_scales) - N_ALPHA, 0]
+                    )
+                    plt.colorbar(label="Magnitude")
+                    plt.title("Gamma Coefficients Heatmap")
+                    plt.xlabel("Time (s)")
+                    plt.ylabel("Scale")
+                    # Adjust layout
+                    plt.tight_layout()
+                    plt.show()
+                    '''
 
                     #phase binning
                     pac_bin_mean_amplitudes = np.zeros((N_ALPHA, N_GAMMA, N_PHASE_BINS))
