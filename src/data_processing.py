@@ -55,7 +55,7 @@ def main():
         subject_raw = mne.io.read_raw_eeglab(subject_path, preload=True)
 
         #notch filter
-        #subject_raw.notch_filter(freqs=60)
+        subject_raw.notch_filter(freqs=60)
 
         subject_data = subject_raw.get_data()
         assert(subject_data.shape == (N_CHANNELS, int(SAMPLING_FREQUENCY_HZ * recording_duration)))
@@ -108,7 +108,7 @@ def main():
                     amplitudes = np.abs(gamma_coefs)
 
                     '''
-                    # Create the figure
+                    # Plot signal, alpha_coefs, and gamma_coefs
                     plt.figure(figsize=(12, 12))
                     # Plot the signal
                     t = np.linspace(0, int(SEGMENT_LENGTH_SAMPLES/SAMPLING_FREQUENCY_HZ), SEGMENT_LENGTH_SAMPLES)
@@ -164,6 +164,7 @@ def main():
 
                     #probability distribution
                     pac_distributions = pac_bin_mean_amplitudes / np.sum(pac_bin_mean_amplitudes, axis=-1, keepdims=True)
+                    assert(pac_distributions.shape == pac_bin_mean_amplitudes.shape)
                     pac_entropies = -np.sum(pac_distributions * np.log2(pac_distributions), axis=-1)
                     pac_mi = (H_MAX - pac_entropies) / H_MAX
                     assert np.all((pac_mi >= 0) & (pac_mi <= 1))
@@ -171,9 +172,9 @@ def main():
                 global_pac_mi /= N_CHANNELS
                 
                 # plot the global pac
-                aligned_global_pac_mi = np.flip(global_pac_mi.T, axis=0)
-                y_indices = np.arange(aligned_global_pac_mi.shape[0])  # First index (0 to 19)
-                x_indices = np.arange(aligned_global_pac_mi.shape[1])  # Second index (0 to 39)
+                aligned_global_pac_mi = global_pac_mi.T #no need to flip
+                y_indices = np.arange(aligned_global_pac_mi.shape[0])
+                x_indices = np.arange(aligned_global_pac_mi.shape[1])
                 y = GAMMA_FREQUENCIES[0] + GAMMA_FREQUENCIES[2] * y_indices[:, np.newaxis]  # Make y a column vector for broadcasting
                 x = ALPHA_FREQUENCIES[0] + ALPHA_FREQUENCIES[2] * x_indices  # Keep x as a row vector
 
@@ -184,7 +185,6 @@ def main():
                 plt.xlabel('Phase Frequencies (Hz)')  # X-axis label
                 plt.ylabel('Amplitude Frequencies (Hz)')  # Y-axis label
                 plt.show()  # Display the plot
-                break
                 
             break
         break
