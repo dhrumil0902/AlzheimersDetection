@@ -38,7 +38,7 @@ def main():
     gamma_scales = get_cwt_scales(GAMMA_FREQUENCIES[0], GAMMA_FREQUENCIES[1], GAMMA_FREQUENCIES[2])
     cwt_scales = np.concatenate((alpha_scales, gamma_scales))
     
-    for subject_id in range(12, N_SUBJECTS + 1):
+    for subject_id in range(31, N_SUBJECTS + 1):
         subject_str = f"{subject_id:03}"
 
         #skip the FTD subjects
@@ -46,7 +46,7 @@ def main():
         if subject_group == "F":
             continue
 
-        subject_path = f"../data/eeg_files_unfiltered/sub-{subject_str}_task-eyesclosed_eeg.set"
+        subject_path = f"../data/ds004504/sub-{subject_str}/eeg/sub-{subject_str}_task-eyesclosed_eeg.set"
         json_path = f"../data/ds004504/sub-{subject_str}/eeg/sub-{subject_str}_task-eyesclosed_eeg.json"
         
         json_file =  open(json_path, 'r');
@@ -55,7 +55,8 @@ def main():
         subject_raw = mne.io.read_raw_eeglab(subject_path, preload=True)
 
         #notch filter
-        subject_raw.notch_filter(freqs=60)
+        #subject_raw.notch_filter(freqs=[60])
+        #subject_raw.filter(l_freq=None, h_freq=50)
 
         subject_data = subject_raw.get_data()
         assert(subject_data.shape == (N_CHANNELS, int(SAMPLING_FREQUENCY_HZ * recording_duration)))
@@ -94,20 +95,39 @@ def main():
                     assert segment_channel.shape == (SEGMENT_LENGTH_SAMPLES,)
 
                     #calculate W(s, t) matrix
-                    coefs, freqs = pywt.cwt(segment_channel, cwt_scales, f"cmor{CWT_B}-{CWT_C}", sampling_period=SAMPLING_PERIOD_SECONDS)
-                    #coefs, freqs = pywt.cwt(segment_channel, cwt_scales, f"cmor{CWT_B}-{CWT_C}")
-                    
+                    #coefs, freqs = pywt.cwt(segment_channel, cwt_scales, f"cmor{CWT_B}-{CWT_C}", sampling_period=SAMPLING_PERIOD_SECONDS)
+                    #alpha_coefs = coefs[0:N_ALPHA, :]
+                    #gamma_coefs = coefs[N_ALPHA:, :]
+
                     #extract alpha freq phases
-                    alpha_coefs = coefs[0:N_ALPHA, :]
-                    #alpha_coefs, _ = pywt.cwt(data=segment_channel, scales=alpha_scales, wavelet=f"cmor{CWT_B}-{CWT_C}")
+                    alpha_coefs, _ = pywt.cwt(data=segment_channel, scales=alpha_scales, wavelet=f"cmor{CWT_B}-{CWT_C}")
                     phases = np.angle(alpha_coefs)
+                    assert((phases <= math.pi).all() and (phases >= -math.pi).all())
 
                     #extract gamma freq amplitudes
-                    gamma_coefs = coefs[N_ALPHA:, :]
-                    #gamma_coefs, _ = pywt.cwt(data=segment_channel, scales=gamma_scales, wavelet=f"cmor{CWT_B}-{CWT_C}")
+                    gamma_coefs, _ = pywt.cwt(data=segment_channel, scales=gamma_scales, wavelet=f"cmor{CWT_B}-{CWT_C}")
                     amplitudes = np.abs(gamma_coefs)
 
                     '''
+                    # Heatmap for phases
+                    plt.subplot(2, 1, 1)
+                    plt.title("Alpha Frequency Phases (Heatmap)")
+                    plt.imshow(phases, aspect='auto', cmap='twilight', extent=[0, SEGMENT_LENGTH_SAMPLES, alpha_scales[-1], alpha_scales[0]])
+                    plt.colorbar(label='Phase (radians)')
+                    plt.xlabel("Time (samples)")
+                    plt.ylabel("Scales")
+
+                    # Heatmap for amplitudes
+                    plt.subplot(2, 1, 2)
+                    plt.title("Gamma Frequency Amplitudes (Heatmap)")
+                    plt.imshow(amplitudes, aspect='auto', cmap='viridis', extent=[0, SEGMENT_LENGTH_SAMPLES, gamma_scales[-1], gamma_scales[0]])
+                    plt.colorbar(label='Amplitude')
+                    plt.xlabel("Time (samples)")
+                    plt.ylabel("Scales")
+
+                    plt.tight_layout()
+                    plt.show()
+
                     # Plot signal, alpha_coefs, and gamma_coefs
                     plt.figure(figsize=(12, 12))
                     # Plot the signal
