@@ -7,6 +7,7 @@ import pywt
 import math
 import matplotlib.pyplot as plt
 import time
+import cv2
 from constants import *
 
 #IMPORTANT: run from root folder of repo so that cwd is AlzheimersDetection/
@@ -31,6 +32,82 @@ def get_phase_bin(phase_rads):
     assert np.all((bin_indices >= 0) & (bin_indices < N_PHASE_BINS))
     return bin_indices
 
+def plot_phases_and_amplitudes(phases, amplitudes, alpha_scales, gamma_scales):
+    # Heatmap for phases
+    plt.subplot(2, 1, 1)
+    plt.title("Alpha Frequency Phases (Heatmap)")
+    plt.imshow(phases, aspect='auto', cmap='twilight', extent=[0, SEGMENT_LENGTH_SAMPLES, alpha_scales[-1], alpha_scales[0]])
+    plt.colorbar(label='Phase (radians)')
+    plt.xlabel("Time (samples)")
+    plt.ylabel("Scales")
+
+    # Heatmap for amplitudes
+    plt.subplot(2, 1, 2)
+    plt.title("Gamma Frequency Amplitudes (Heatmap)")
+    plt.imshow(amplitudes, aspect='auto', cmap='viridis', extent=[0, SEGMENT_LENGTH_SAMPLES, gamma_scales[-1], gamma_scales[0]])
+    plt.colorbar(label='Amplitude')
+    plt.xlabel("Time (samples)")
+    plt.ylabel("Scales")
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_signal_and_cwt_coefs(segment_channel, alpha_coefs, gamma_coefs):
+    # Plot signal, alpha_coefs, and gamma_coefs
+    plt.figure(figsize=(12, 12))
+    # Plot the signal
+    t = np.linspace(0, int(SEGMENT_LENGTH_SAMPLES/SAMPLING_FREQUENCY_HZ), SEGMENT_LENGTH_SAMPLES)
+    plt.subplot(3, 1, 1)
+    plt.plot(t, segment_channel, label="Signal", color='blue')
+    plt.title("Signal")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Amplitude")
+    plt.legend()
+    plt.grid(True)
+    # Plot the alpha coefficients heatmap
+    plt.subplot(3, 1, 2)
+    plt.imshow(
+        np.abs(alpha_coefs), 
+        aspect='auto', 
+        cmap='viridis', 
+        extent=[t[0], t[-1], N_ALPHA, 0]
+    )
+    plt.colorbar(label="Magnitude")
+    plt.title("Alpha Coefficients Heatmap")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Scale")
+    # Plot the gamma coefficients heatmap
+    plt.subplot(3, 1, 3)
+    plt.imshow(
+        np.abs(gamma_coefs), 
+        aspect='auto', 
+        cmap='viridis', 
+        extent=[t[0], t[-1], N_GAMMA, 0]
+    )
+    plt.colorbar(label="Magnitude")
+    plt.title("Gamma Coefficients Heatmap")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Scale")
+    # Adjust layout
+    plt.tight_layout()
+    plt.show()
+
+def plot_gpac(global_pac_mi, subject_group, subject_str, segment_id):
+    # plot the global pac
+    aligned_global_pac_mi = global_pac_mi.T #no need to flip
+    y_indices = np.arange(aligned_global_pac_mi.shape[0])
+    x_indices = np.arange(aligned_global_pac_mi.shape[1])
+    y = GAMMA_FREQUENCIES[0] + GAMMA_FREQUENCIES[2] * y_indices[:, np.newaxis]  # Make y a column vector for broadcasting
+    x = ALPHA_FREQUENCIES[0] + ALPHA_FREQUENCIES[2] * x_indices  # Keep x as a row vector
+
+    plt.figure(figsize=(10, 6))
+    plt.pcolormesh(x, y, aligned_global_pac_mi, shading='auto', cmap='viridis')  # Color-coded representation
+    plt.colorbar(label='Value')  # Add a color bar to indicate the scale
+    plt.title(f'Color Plot for subject {subject_group} {subject_str} at t = {segment_id}')  # Title of the plot
+    plt.xlabel('Phase Frequencies (Hz)')  # X-axis label
+    plt.ylabel('Amplitude Frequencies (Hz)')  # Y-axis label
+    plt.show()  # Display the plot
+
 def main():
     start_time = time.time()
 
@@ -38,7 +115,7 @@ def main():
     gamma_scales = get_cwt_scales(GAMMA_FREQUENCIES[0], GAMMA_FREQUENCIES[1], GAMMA_FREQUENCIES[2])
     cwt_scales = np.concatenate((alpha_scales, gamma_scales))
     
-    for subject_id in range(31, N_SUBJECTS + 1):
+    for subject_id in range(12, N_SUBJECTS + 1):
         subject_str = f"{subject_id:03}"
 
         #skip the FTD subjects
@@ -54,26 +131,15 @@ def main():
         recording_duration = json_data.get("RecordingDuration")
         subject_raw = mne.io.read_raw_eeglab(subject_path, preload=True)
 
-        #notch filter
-        #subject_raw.notch_filter(freqs=[60])
+        #inspect raw signals
+        #subject_raw.plot(scalings="auto", show=True, block=True)
+
+        #filtering
+        subject_raw.notch_filter(freqs=[60])
         #subject_raw.filter(l_freq=None, h_freq=50)
 
         subject_data = subject_raw.get_data()
         assert(subject_data.shape == (N_CHANNELS, int(SAMPLING_FREQUENCY_HZ * recording_duration)))
-
-        '''
-        #plot subject data to determine how much start/end padding to use
-        t = np.linspace(0, 8, 8 * SAMPLING_FREQUENCY_HZ)
-        plt.figure(figsize=(10, 4))  # Optional: Set the figure size
-        plt.plot(t, subject_data[0][:8*SAMPLING_FREQUENCY_HZ], label="Signal")
-        plt.title(f"1D Signal {recording_duration}")
-        plt.xlabel("Time (s)")
-        plt.ylabel("Amplitude")
-        plt.legend()  # Show legend
-        plt.grid(True)  # Add grid for better readability
-        plt.show()
-        continue
-        '''
 
         d_epoch_start_time_sec = (recording_duration - 2 * SUBJECT_PADDING_LENGTH_SECONDS - EPOCH_LENGTH_SECONDS) / (N_EPOCHS - 1)
         d_epoch_start_time_sample = int(d_epoch_start_time_sec * SAMPLING_FREQUENCY_HZ)
@@ -82,6 +148,7 @@ def main():
             start_sample = SUBJECT_PADDING_LENGTH_SAMPLES + epoch_id * d_epoch_start_time_sample
             epoch = subject_data[:, start_sample : (start_sample + EPOCH_LENGTH_SAMPLES)]
             assert(epoch.shape == (N_CHANNELS, EPOCH_LENGTH_SAMPLES))
+            gpac_grads = np.empty((0, N_ALPHA, N_GAMMA))
             
             for segment_id in range(N_SEGMENTS):
                 start_sample = segment_id * SEGMENT_LENGTH_SAMPLES
@@ -95,78 +162,18 @@ def main():
                     assert segment_channel.shape == (SEGMENT_LENGTH_SAMPLES,)
 
                     #calculate W(s, t) matrix
-                    #coefs, freqs = pywt.cwt(segment_channel, cwt_scales, f"cmor{CWT_B}-{CWT_C}", sampling_period=SAMPLING_PERIOD_SECONDS)
-                    #alpha_coefs = coefs[0:N_ALPHA, :]
-                    #gamma_coefs = coefs[N_ALPHA:, :]
+                    coefs, freqs = pywt.cwt(segment_channel, cwt_scales, f"cmor{CWT_B}-{CWT_C}", sampling_period=SAMPLING_PERIOD_SECONDS)
+                    alpha_coefs = coefs[0:N_ALPHA, :]
+                    gamma_coefs = coefs[N_ALPHA:, :]
 
                     #extract alpha freq phases
-                    alpha_coefs, _ = pywt.cwt(data=segment_channel, scales=alpha_scales, wavelet=f"cmor{CWT_B}-{CWT_C}")
+                    #alpha_coefs, _ = pywt.cwt(data=segment_channel, scales=alpha_scales, wavelet=f"cmor{CWT_B}-{CWT_C}")
                     phases = np.angle(alpha_coefs)
                     assert((phases <= math.pi).all() and (phases >= -math.pi).all())
 
                     #extract gamma freq amplitudes
-                    gamma_coefs, _ = pywt.cwt(data=segment_channel, scales=gamma_scales, wavelet=f"cmor{CWT_B}-{CWT_C}")
+                    #gamma_coefs, _ = pywt.cwt(data=segment_channel, scales=gamma_scales, wavelet=f"cmor{CWT_B}-{CWT_C}")
                     amplitudes = np.abs(gamma_coefs)
-
-                    '''
-                    # Heatmap for phases
-                    plt.subplot(2, 1, 1)
-                    plt.title("Alpha Frequency Phases (Heatmap)")
-                    plt.imshow(phases, aspect='auto', cmap='twilight', extent=[0, SEGMENT_LENGTH_SAMPLES, alpha_scales[-1], alpha_scales[0]])
-                    plt.colorbar(label='Phase (radians)')
-                    plt.xlabel("Time (samples)")
-                    plt.ylabel("Scales")
-
-                    # Heatmap for amplitudes
-                    plt.subplot(2, 1, 2)
-                    plt.title("Gamma Frequency Amplitudes (Heatmap)")
-                    plt.imshow(amplitudes, aspect='auto', cmap='viridis', extent=[0, SEGMENT_LENGTH_SAMPLES, gamma_scales[-1], gamma_scales[0]])
-                    plt.colorbar(label='Amplitude')
-                    plt.xlabel("Time (samples)")
-                    plt.ylabel("Scales")
-
-                    plt.tight_layout()
-                    plt.show()
-
-                    # Plot signal, alpha_coefs, and gamma_coefs
-                    plt.figure(figsize=(12, 12))
-                    # Plot the signal
-                    t = np.linspace(0, int(SEGMENT_LENGTH_SAMPLES/SAMPLING_FREQUENCY_HZ), SEGMENT_LENGTH_SAMPLES)
-                    plt.subplot(3, 1, 1)
-                    plt.plot(t, segment_channel, label="Signal", color='blue')
-                    plt.title("Signal")
-                    plt.xlabel("Time (s)")
-                    plt.ylabel("Amplitude")
-                    plt.legend()
-                    plt.grid(True)
-                    # Plot the alpha coefficients heatmap
-                    plt.subplot(3, 1, 2)
-                    plt.imshow(
-                        np.abs(alpha_coefs), 
-                        aspect='auto', 
-                        cmap='viridis', 
-                        extent=[t[0], t[-1], N_ALPHA, 0]
-                    )
-                    plt.colorbar(label="Magnitude")
-                    plt.title("Alpha Coefficients Heatmap")
-                    plt.xlabel("Time (s)")
-                    plt.ylabel("Scale")
-                    # Plot the gamma coefficients heatmap
-                    plt.subplot(3, 1, 3)
-                    plt.imshow(
-                        np.abs(gamma_coefs), 
-                        aspect='auto', 
-                        cmap='viridis', 
-                        extent=[t[0], t[-1], len(cwt_scales) - N_ALPHA, 0]
-                    )
-                    plt.colorbar(label="Magnitude")
-                    plt.title("Gamma Coefficients Heatmap")
-                    plt.xlabel("Time (s)")
-                    plt.ylabel("Scale")
-                    # Adjust layout
-                    plt.tight_layout()
-                    plt.show()
-                    '''
 
                     #phase binning
                     pac_bin_mean_amplitudes = np.zeros((N_ALPHA, N_GAMMA, N_PHASE_BINS))
@@ -190,29 +197,25 @@ def main():
                     assert np.all((pac_mi >= 0) & (pac_mi <= 1))
                     global_pac_mi += pac_mi
                 global_pac_mi /= N_CHANNELS
-                
-                # plot the global pac
-                aligned_global_pac_mi = global_pac_mi.T #no need to flip
-                y_indices = np.arange(aligned_global_pac_mi.shape[0])
-                x_indices = np.arange(aligned_global_pac_mi.shape[1])
-                y = GAMMA_FREQUENCIES[0] + GAMMA_FREQUENCIES[2] * y_indices[:, np.newaxis]  # Make y a column vector for broadcasting
-                x = ALPHA_FREQUENCIES[0] + ALPHA_FREQUENCIES[2] * x_indices  # Keep x as a row vector
 
-                plt.figure(figsize=(10, 6))
-                plt.pcolormesh(x, y, aligned_global_pac_mi, shading='auto', cmap='viridis')  # Color-coded representation
-                plt.colorbar(label='Value')  # Add a color bar to indicate the scale
-                plt.title(f'Color Plot for subject {subject_group} {subject_str} at t = {segment_id}')  # Title of the plot
-                plt.xlabel('Phase Frequencies (Hz)')  # X-axis label
-                plt.ylabel('Amplitude Frequencies (Hz)')  # Y-axis label
-                plt.show()  # Display the plot
-                
+                #gradient
+                grad_x = cv2.Sobel(global_pac_mi, cv2.CV_64F, dx=1, dy=0, ksize=3)  # Gradient in x-direction
+                grad_y = cv2.Sobel(global_pac_mi, cv2.CV_64F, dx=0, dy=1, ksize=3)  # Gradient in y-direction
+                grad = (grad_x * grad_x + grad_y * grad_y) ** 0.5
+                assert(grad.shape == (N_ALPHA, N_GAMMA))
+                gpac_grads = np.concatenate((gpac_grads, grad[np.newaxis, :, :]), axis=0)
+
+            #standardization across all grac gradients
+            gpac_grad_mean = np.mean(gpac_grads)
+            gpac_grad_std = np.std(gpac_grads)
+            gpac_grads_standardized = (gpac_grads - gpac_grad_mean) / gpac_grad_std
+            assert(gpac_grads_standardized.shape == (N_SEGMENTS, N_ALPHA, N_GAMMA))
             break
         break
     
     end_time = time.time()
-    print(end_time - start_time)
-    #assert(ad_cn_count == N_AD + N_CN)
-    #assert(segment_count == ad_cn_count * N_EPOCHS * N_SEGMENTS)
+    print(f"time spent: {end_time - start_time}")
+
 
 if __name__ == "__main__":
     main()
