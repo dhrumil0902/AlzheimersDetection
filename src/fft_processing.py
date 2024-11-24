@@ -20,26 +20,59 @@ def get_subject_group(subject_str):
     assert(not participant_row.empty)
     return participant_row['Group'].values[0]
 
-def get_cwt_scales(min_freq, max_freq, step_size):
-    frequencies = np.arange(min_freq, max_freq, step_size)
-    scales = 1 / (frequencies * SAMPLING_PERIOD_SECONDS)
-    return scales
-
-def get_phase_bin(phase_rads):
-    phase_rads = np.where(phase_rads == math.pi, -math.pi, phase_rads)
-    assert np.all((phase_rads >= -math.pi) & (phase_rads < math.pi))
-    bin_indices = ((phase_rads + math.pi) / (2 * math.pi) * N_PHASE_BINS).astype(int)
-    assert np.all((bin_indices >= 0) & (bin_indices < N_PHASE_BINS))
-    return bin_indices
-
 def get_band_index(frequency):
     insertion_id = bisect.bisect_left(FREQUENCY_BANDS, frequency)
     return insertion_id - 1 if insertion_id > 0 else 0
 
+def process_epoch(global_epoch_id, is_healthy, epoch, n_segments, segment_length_samples, sampling_period_seconds):
+    epoch_fft_features = []
+    
+    for segment_id in range(n_segments):
+        start_sample = segment_id * segment_length_samples
+        end_sample = start_sample + segment_length_samples #exclusive
+        segment = epoch[:, start_sample:end_sample]
+        assert segment.shape == (N_CHANNELS, segment_length_samples)
+        segment_fft_features = []
+
+        for channel_id in range(N_CHANNELS):
+            segment_channel = segment[channel_id, :]
+            assert segment_channel.shape == (segment_length_samples,)
+
+            #find FFT coefficients
+            fft_coefs = np.fft.fft(segment_channel)
+            all_freqs = np.fft.fftfreq(segment_length_samples, d=sampling_period_seconds)
+            mask = (all_freqs >= 0) & (all_freqs <= 50)
+            filtered_freqs = all_freqs[mask]
+            filtered_fft = fft_coefs[mask]
+
+            #find FFT features
+            fft_features = np.zeros(N_FREQUENCY_BANDS)
+            for freq, coef in zip(filtered_freqs, filtered_fft):
+                band_id = get_band_index(freq)
+                fft_features[band_id] += abs(coef)
+            for band_id in range(N_FREQUENCY_BANDS):
+                fft_features[band_id] /= FREQUENCY_BANDS[band_id + 1] - FREQUENCY_BANDS[band_id]
+            segment_fft_features.append(fft_features)
+        
+        segment_fft_features = np.array(segment_fft_features)
+        assert(segment_fft_features.shape == (N_CHANNELS, N_FREQUENCY_BANDS))
+        epoch_fft_features.append(segment_fft_features)
+        
+    epoch_fft_features = np.array(epoch_fft_features)
+    assert(epoch_fft_features.shape == (n_segments, N_CHANNELS, N_FREQUENCY_BANDS))
+
+    #store epoch features somewhere for later use
+    epoch_path = f"data/fft/fft_{global_epoch_id}_{'cn' if is_healthy else 'ad'}.npy"
+    np.save(epoch_path, epoch_fft_features)
+    print(f"saved {epoch_path}")
+
+
 def main():
     start_time = time.time()
-    
-    for subject_id in range(12, N_SUBJECTS + 1):
+    global_epoch_id = 0
+
+    #NEMAR Dataset
+    for subject_id in range(1, N_SUBJECTS + 1):
         subject_str = f"{subject_id:03}"
 
         #skip the FTD subjects
@@ -57,56 +90,55 @@ def main():
 
         #inspect raw signals
         #subject_raw.plot(scalings="auto", show=True, block=True)
+        #channel_names = subject_raw.info['ch_names']
+        #print("Channel Names:", channel_names)
 
         #filtering
-        #subject_raw.notch_filter(freqs=[60])
-        subject_raw.filter(l_freq=None, h_freq=50)
+        #subject_raw.filter(l_freq=None, h_freq=50)
 
         subject_data = subject_raw.get_data()
         assert(subject_data.shape == (N_CHANNELS, int(SAMPLING_FREQUENCY_HZ * recording_duration)))
 
-        d_epoch_start_time_sec = (recording_duration - 2 * SUBJECT_PADDING_LENGTH_SECONDS - EPOCH_LENGTH_SECONDS) / (N_EPOCHS - 1)
+        d_epoch_start_time_sec = (recording_duration - 2 * NEMAR_PADDING_LENGTH_SECONDS - EPOCH_LENGTH_SECONDS) / (N_EPOCHS - 1)
         d_epoch_start_time_sample = int(d_epoch_start_time_sec * SAMPLING_FREQUENCY_HZ)
 
         for epoch_id in range(N_EPOCHS):
-            start_sample = SUBJECT_PADDING_LENGTH_SAMPLES + epoch_id * d_epoch_start_time_sample
+            start_sample = NEMAR_PADDING_LENGTH_SAMPLES + epoch_id * d_epoch_start_time_sample
             epoch = subject_data[:, start_sample : (start_sample + EPOCH_LENGTH_SAMPLES)]
             assert(epoch.shape == (N_CHANNELS, EPOCH_LENGTH_SAMPLES))
-            
-            for segment_id in range(N_SEGMENTS):
-                start_sample = segment_id * SEGMENT_LENGTH_SAMPLES
-                end_sample = start_sample + SEGMENT_LENGTH_SAMPLES #exclusive
-                segment = epoch[:, start_sample:end_sample]
-                assert segment.shape == (N_CHANNELS, SEGMENT_LENGTH_SAMPLES)
-                segment_fft_features = []
 
-                for channel_id in range(N_CHANNELS):
-                    segment_channel = segment[channel_id, :]
-                    assert segment_channel.shape == (SEGMENT_LENGTH_SAMPLES,)
+            process_epoch(global_epoch_id, subject_group == "C", epoch, N_SEGMENTS, SEGMENT_LENGTH_SAMPLES, SAMPLING_PERIOD_SECONDS)
+            global_epoch_id += 1
 
-                    #find FFT coefficients
-                    fft_coefs = np.fft.fft(segment_channel)
-                    all_freqs = np.fft.fftfreq(SEGMENT_LENGTH_SAMPLES, d=SAMPLING_PERIOD_SECONDS)
-                    mask = (all_freqs >= 0) & (all_freqs <= 50)
-                    filtered_freqs = all_freqs[mask]
-                    filtered_fft = fft_coefs[mask]
+    #OSF Dataset
+    for alz_id in range(OSF_N_AD):
+        subject_path = f"../data/EEG_data/AD/Eyes_closed/Paciente{alz_id+1}/"
+        epoch = []
 
-                    #find FFT features
-                    fft_features = np.zeros(N_FREQUENCY_BANDS)
-                    for freq, coef in zip(filtered_freqs, filtered_fft):
-                        band_id = get_band_index(freq)
-                        fft_features[band_id] += abs(coef)
-                    for band_id in range(N_FREQUENCY_BANDS):
-                        fft_features[band_id] /= FREQUENCY_BANDS[band_id + 1] - FREQUENCY_BANDS[band_id]
-                    segment_fft_features.append(fft_features)
-                
-                segment_fft_features = np.array(segment_fft_features)
-                assert(segment_fft_features.shape == (N_CHANNELS, N_FREQUENCY_BANDS))
+        for channel_name in CHANNEL_NAMES:
+            channel_path = subject_path + channel_name + ".txt"
+            channel = np.loadtxt(channel_path)
+            assert(channel.shape == (OSF_SAMPLE_LENGTH_SAMPLES,))
+            epoch.append(channel)
+            #plot_signal(channel)
+        
+        epoch = np.array(epoch)
+        process_epoch(global_epoch_id, False, epoch, OSF_N_SEGMENTS, OSF_SEGMENT_LENGTH_SAMPLES, OSF_SAMPLING_PERIOD_SECONDS)
+        global_epoch_id += 1
 
-                
-                break
-            break
-        break
+    for healthy_id in range(OSF_N_CN):
+        subject_path = f"../data/EEG_data/Healthy/Eyes_closed/Paciente{healthy_id+1}/"
+        epoch = []
+
+        for channel_name in CHANNEL_NAMES:
+            channel_path = subject_path + channel_name + ".txt"
+            channel = np.loadtxt(channel_path)
+            assert(channel.shape == (OSF_SAMPLE_LENGTH_SAMPLES,))
+            epoch.append(channel)
+        
+        epoch = np.array(epoch)
+        process_epoch(global_epoch_id, True, epoch, OSF_N_SEGMENTS, OSF_SEGMENT_LENGTH_SAMPLES, OSF_SAMPLING_PERIOD_SECONDS)
+        global_epoch_id += 1
     
     end_time = time.time()
     print(f"time spent: {end_time - start_time}")
