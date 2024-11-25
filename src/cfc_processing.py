@@ -58,7 +58,7 @@ def plot_signal_and_cwt_coefs(segment_channel, alpha_coefs, gamma_coefs):
     # Plot signal, alpha_coefs, and gamma_coefs
     plt.figure(figsize=(12, 12))
     # Plot the signal
-    t = np.linspace(0, int(SEGMENT_LENGTH_SAMPLES/SAMPLING_FREQUENCY_HZ), SEGMENT_LENGTH_SAMPLES)
+    t = np.linspace(0, int(SEGMENT_LENGTH_SAMPLES/SAMPLING_FREQUENCY), SEGMENT_LENGTH_SAMPLES)
     plt.subplot(3, 1, 1)
     plt.plot(t, segment_channel, label="Signal", color='blue')
     plt.title("Signal")
@@ -154,9 +154,28 @@ def plot_segment(segment, sampling_rate, channel_labels=CHANNEL_NAMES, title="EE
     plt.tight_layout()
     plt.show()
 
+def interp(signal, sampling_freq, factor=2, filter_order=CFC_GAMMA_INTERP_LP_ORDER):
+    # Step 1: Zero-padding
+    upsampled_length = len(signal) * factor
+    upsampled_signal = np.zeros(upsampled_length)
+    upsampled_signal[::factor] = signal  # Insert the original signal at every factor-th position
+    
+    # Step 2: Design a low-pass filter
+    nyquist = sampling_freq / 2  # Original Nyquist frequency
+    cutoff = nyquist  # Default to Nyquist frequency of the original signal
+    normalized_cutoff = cutoff / (factor * nyquist)  # Normalize cutoff for upsampled Nyquist frequency
+    b, a = butter(filter_order, normalized_cutoff, btype='low')
+    
+    # Step 3: Filter the signal
+    filtered_signal = filtfilt(b, a, upsampled_signal)  # Apply zero-phase filtering
+    
+    return filtered_signal
+
 
 #global_epoch_id is the epoch_id across both datasets, used for naming
-def process_epoch(global_epoch_id, is_healthy, subject_str, epoch, n_segments, segment_length_samples, alpha_scales, gamma_scales, sampling_freq_hz):
+def process_epoch(global_epoch_id, is_healthy, subject_str, epoch, n_segments, segment_length_samples, alpha_scales, gamma_scales, sampling_freq):
+    if global_epoch_id <= 324:
+        return
     gpac_grads = np.empty((0, N_ALPHA, N_GAMMA))
     
     for segment_id in range(n_segments):
@@ -177,13 +196,23 @@ def process_epoch(global_epoch_id, is_healthy, subject_str, epoch, n_segments, s
             #gamma_coefs = coefs[N_ALPHA:, :]
             
             #notch filter
-            b_notch, a_notch = iirnotch(w0=60 / (sampling_freq_hz / 2), Q=30)
+            b_notch, a_notch = iirnotch(w0=CFC_NOTCH_FREQUENCY / (sampling_freq / 2), Q=CFC_NOTCH_QUALITY_FACTOR)
             segment_channel_notch = filtfilt(b_notch, a_notch, segment_channel)
 
+            '''
+            #interp for gamma bandpass filter
+            interpolated_sampling_freq = sampling_freq
+            if subject_str == "OSF":
+                segment_channel_notch = interp(segment_channel_notch, sampling_freq)
+                interpolated_sampling_freq *= 2
+                plot_signal(segment_channel_notch)
+            '''
+
             #filter to the alpha and gamma ranges
-            b_alpha, a_alpha = butter(6, [ALPHA_FREQUENCIES[0] / (0.5 * sampling_freq_hz), ALPHA_FREQUENCIES[1] / (0.5 * sampling_freq_hz)], btype='band')
+            b_alpha, a_alpha = butter(CFC_BAND_ORDER, [ALPHA_FREQUENCIES[0] / (0.5 * sampling_freq), ALPHA_FREQUENCIES[1] / (0.5 * sampling_freq)], btype='band')
             segment_channel_alpha = filtfilt(b_alpha, a_alpha, segment_channel_notch)
-            b_gamma, a_gamma = butter(6, [GAMMA_FREQUENCIES[0] / (0.5 * sampling_freq_hz), GAMMA_FREQUENCIES[1] / (0.5 * sampling_freq_hz)], btype='band')
+            #this fails for OSF bc upper limit of bandpass range exceeds Nyquist freq (64Hz)
+            b_gamma, a_gamma = butter(CFC_BAND_ORDER, [GAMMA_FREQUENCIES[0] / (0.5 * sampling_freq), min(GAMMA_FREQUENCIES[1], sampling_freq / 2 - 1e-6) / (0.5 * sampling_freq)], btype='band')
             segment_channel_gamma = filtfilt(b_gamma, a_gamma, segment_channel_notch)
 
             #extract alpha freq phases
@@ -218,8 +247,8 @@ def process_epoch(global_epoch_id, is_healthy, subject_str, epoch, n_segments, s
             global_pac_mi += pac_mi
         global_pac_mi /= N_CHANNELS
 
-        #plot_segment(segment, sampling_freq_hz)
-        #plot_gpac(global_pac_mi, "CN" if is_healthy else "AD", subject_str, segment_id)
+        plot_segment(segment, sampling_freq)
+        plot_gpac(global_pac_mi, "CN" if is_healthy else "AD", subject_str, segment_id)
 
         #gradient
         grad_x = cv2.Sobel(global_pac_mi, cv2.CV_64F, dx=1, dy=0, ksize=3)  # Gradient in x-direction
@@ -235,9 +264,9 @@ def process_epoch(global_epoch_id, is_healthy, subject_str, epoch, n_segments, s
     assert(gpac_grads_standardized.shape == (n_segments, N_ALPHA, N_GAMMA))
 
     #store standardized gPAC gradient (with tag) somewhere for later use
-    epoch_path = f"data/cfc/cfc_{global_epoch_id}_{'cn' if is_healthy else 'ad'}.npy"
-    np.save(epoch_path, gpac_grads_standardized)
-    print(f"saved {epoch_path}")
+    #epoch_path = f"data/cfc/cfc_{global_epoch_id}_{'cn' if is_healthy else 'ad'}.npy"
+    #np.save(epoch_path, gpac_grads_standardized)
+    #print(f"saved {epoch_path}")
 
 
 def main():
@@ -270,18 +299,18 @@ def main():
 
         #inspect raw signals
         #subject_raw.plot(scalings="auto", show=True, block=True)
-        #temp_data = subject_raw.get_data()[:, 654*SAMPLING_FREQUENCY_HZ:687*SAMPLING_FREQUENCY_HZ]
-        #plot_segment(temp_data, SAMPLING_FREQUENCY_HZ)
+        #temp_data = subject_raw.get_data()[:, 654*SAMPLING_FREQUENCY:687*SAMPLING_FREQUENCY]
+        #plot_segment(temp_data, SAMPLING_FREQUENCY)
 
         #filtering; NAH, using scipy now
         #subject_raw.notch_filter(freqs=[60])
         #subject_raw.filter(l_freq=None, h_freq=50)
 
         subject_data = subject_raw.get_data()
-        assert(subject_data.shape == (N_CHANNELS, int(SAMPLING_FREQUENCY_HZ * recording_duration)))
+        assert(subject_data.shape == (N_CHANNELS, int(SAMPLING_FREQUENCY * recording_duration)))
 
         d_epoch_start_time_sec = (recording_duration - 2 * NEMAR_PADDING_LENGTH_SECONDS - EPOCH_LENGTH_SECONDS) / (N_EPOCHS - 1)
-        d_epoch_start_time_sample = int(d_epoch_start_time_sec * SAMPLING_FREQUENCY_HZ)
+        d_epoch_start_time_sample = int(d_epoch_start_time_sec * SAMPLING_FREQUENCY)
 
         for epoch_id in range(N_EPOCHS):
             start_sample = NEMAR_PADDING_LENGTH_SAMPLES + epoch_id * d_epoch_start_time_sample
@@ -289,7 +318,7 @@ def main():
             assert(epoch.shape == (N_CHANNELS, EPOCH_LENGTH_SAMPLES))
 
             #print("subject id: ", subject_id, "\tglobal epoch: ", global_epoch_id)
-            process_epoch(global_epoch_id, subject_group == "C", subject_str, epoch, N_SEGMENTS, SEGMENT_LENGTH_SAMPLES, nemar_alpha_scales, nemar_gamma_scales, SAMPLING_FREQUENCY_HZ)
+            process_epoch(global_epoch_id, subject_group == "C", subject_str, epoch, N_SEGMENTS, SEGMENT_LENGTH_SAMPLES, nemar_alpha_scales, nemar_gamma_scales, SAMPLING_FREQUENCY)
             global_epoch_id += 1
     
 
@@ -309,7 +338,7 @@ def main():
         assert(epoch.shape == (N_CHANNELS, OSF_SAMPLE_LENGTH_SAMPLES))
 
         #print("alz id: ", alz_id)
-        process_epoch(global_epoch_id, False, "OSF", epoch, OSF_N_SEGMENTS, OSF_SEGMENT_LENGTH_SAMPLES, osf_alpha_scales, osf_gamma_scales, OSF_SAMPLING_FREQUENCY_HZ)
+        process_epoch(global_epoch_id, False, "OSF", epoch, OSF_N_SEGMENTS, OSF_SEGMENT_LENGTH_SAMPLES, osf_alpha_scales, osf_gamma_scales, OSF_SAMPLING_FREQUENCY)
         global_epoch_id += 1
 
     for healthy_id in range(OSF_N_CN):
@@ -325,7 +354,7 @@ def main():
         epoch = np.array(epoch)
         assert(epoch.shape == (N_CHANNELS, OSF_SAMPLE_LENGTH_SAMPLES))
 
-        process_epoch(global_epoch_id, True, "OSF", epoch, OSF_N_SEGMENTS, OSF_SEGMENT_LENGTH_SAMPLES, osf_alpha_scales, osf_gamma_scales, OSF_SAMPLING_FREQUENCY_HZ)
+        process_epoch(global_epoch_id, True, "OSF", epoch, OSF_N_SEGMENTS, OSF_SEGMENT_LENGTH_SAMPLES, osf_alpha_scales, osf_gamma_scales, OSF_SAMPLING_FREQUENCY)
         global_epoch_id += 1
     
     end_time = time.time()

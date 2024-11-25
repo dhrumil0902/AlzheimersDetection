@@ -8,6 +8,7 @@ import math
 import matplotlib.pyplot as plt
 import time
 import bisect
+from scipy.signal import butter, filtfilt
 from constants import *
 
 #IMPORTANT: run from root folder of repo so that cwd is AlzheimersDetection/
@@ -38,10 +39,16 @@ def process_epoch(global_epoch_id, is_healthy, epoch, n_segments, segment_length
             segment_channel = segment[channel_id, :]
             assert segment_channel.shape == (segment_length_samples,)
 
+            #LP filter
+            nyquist = 1 / (2 * sampling_period_seconds)
+            normal_cutoff = FFT_LP_FREQUENCY / nyquist
+            b_lp, a_lp = butter(FFT_LP_ORDER, normal_cutoff, btype='low')
+            segment_channel_lp = filtfilt(b_lp, a_lp, segment_channel)
+
             #find FFT coefficients
-            fft_coefs = np.fft.fft(segment_channel)
+            fft_coefs = np.fft.fft(segment_channel_lp)
             all_freqs = np.fft.fftfreq(segment_length_samples, d=sampling_period_seconds)
-            mask = (all_freqs >= 0) & (all_freqs <= 50)
+            mask = (all_freqs >= FREQUENCY_BANDS[0]) & (all_freqs <= FREQUENCY_BANDS[-1])
             filtered_freqs = all_freqs[mask]
             filtered_fft = fft_coefs[mask]
 
@@ -93,14 +100,14 @@ def main():
         #channel_names = subject_raw.info['ch_names']
         #print("Channel Names:", channel_names)
 
-        #filtering
+        #filtering; NAH using scipy now
         #subject_raw.filter(l_freq=None, h_freq=50)
 
         subject_data = subject_raw.get_data()
-        assert(subject_data.shape == (N_CHANNELS, int(SAMPLING_FREQUENCY_HZ * recording_duration)))
+        assert(subject_data.shape == (N_CHANNELS, int(SAMPLING_FREQUENCY * recording_duration)))
 
         d_epoch_start_time_sec = (recording_duration - 2 * NEMAR_PADDING_LENGTH_SECONDS - EPOCH_LENGTH_SECONDS) / (N_EPOCHS - 1)
-        d_epoch_start_time_sample = int(d_epoch_start_time_sec * SAMPLING_FREQUENCY_HZ)
+        d_epoch_start_time_sample = int(d_epoch_start_time_sec * SAMPLING_FREQUENCY)
 
         for epoch_id in range(N_EPOCHS):
             start_sample = NEMAR_PADDING_LENGTH_SAMPLES + epoch_id * d_epoch_start_time_sample
