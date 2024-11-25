@@ -6,8 +6,10 @@ import mne
 import pywt
 import math
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 import time
 import cv2
+from scipy.signal import iirnotch, butter, filtfilt
 from constants import *
 
 #IMPORTANT: run from root folder of repo so that cwd is AlzheimersDetection/
@@ -100,12 +102,13 @@ def plot_gpac(global_pac_mi, subject_group, subject_str, segment_id):
     y = GAMMA_FREQUENCIES[0] + GAMMA_FREQUENCIES[2] * y_indices[:, np.newaxis]  # Make y a column vector for broadcasting
     x = ALPHA_FREQUENCIES[0] + ALPHA_FREQUENCIES[2] * x_indices  # Keep x as a row vector
 
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(8, 6))
     plt.pcolormesh(x, y, aligned_global_pac_mi, shading='auto', cmap='viridis')  # Color-coded representation
     plt.colorbar(label='Value')  # Add a color bar to indicate the scale
     plt.title(f'Color Plot for subject {subject_group} {subject_str} at t = {segment_id}')  # Title of the plot
     plt.xlabel('Phase Frequencies (Hz)')  # X-axis label
     plt.ylabel('Amplitude Frequencies (Hz)')  # Y-axis label
+    plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
     plt.show()  # Display the plot
 
 def plot_signal(signal, title="Signal Plot", xlabel="Sample Index", ylabel="Amplitude"):
@@ -121,8 +124,39 @@ def plot_signal(signal, title="Signal Plot", xlabel="Sample Index", ylabel="Ampl
     plt.tight_layout()
     plt.show()
 
+def plot_segment(segment, sampling_rate, channel_labels=CHANNEL_NAMES, title="EEG Signals"):
+    if segment.shape[0] != 19:
+        raise ValueError("Input data must have 19 channels (19xN array).")
+
+    num_channels, num_samples = segment.shape
+    time = np.linspace(0, num_samples / sampling_rate, num_samples)  # Time vector
+
+    # Default channel labels if none are provided
+    if channel_labels is None:
+        channel_labels = [f"Ch{i+1}" for i in range(num_channels)]
+
+    # Normalize signals for better visualization
+    eeg_data_normalized = segment / np.max(np.abs(segment), axis=1, keepdims=True)
+
+    # Plot each channel with vertical offsets
+    plt.figure(figsize=(12, 8))
+    offsets = np.arange(num_channels) * 2  # Offset each signal for clarity
+    for i in range(num_channels):
+        plt.plot(time, eeg_data_normalized[i] + offsets[i], label=channel_labels[i])
+
+    # Plot settings
+    plt.title(title)
+    plt.xlabel("Time (s)")
+    plt.ylabel("Channels")
+    plt.yticks(offsets, channel_labels)  # Place y-ticks at offsets with channel labels
+    plt.grid(True, which="both", linestyle="--", linewidth=0.5)
+    plt.legend(loc="upper right", fontsize="small", ncol=2)
+    plt.tight_layout()
+    plt.show()
+
+
 #global_epoch_id is the epoch_id across both datasets, used for naming
-def process_epoch(global_epoch_id, is_healthy, epoch, n_segments, segment_length_samples, cwt_scales):
+def process_epoch(global_epoch_id, is_healthy, subject_str, epoch, n_segments, segment_length_samples, alpha_scales, gamma_scales, sampling_freq_hz):
     gpac_grads = np.empty((0, N_ALPHA, N_GAMMA))
     
     for segment_id in range(n_segments):
@@ -138,17 +172,27 @@ def process_epoch(global_epoch_id, is_healthy, epoch, n_segments, segment_length
             assert segment_channel.shape == (segment_length_samples,)
 
             #calculate W(s, t) matrix
-            coefs, freqs = pywt.cwt(segment_channel, cwt_scales, f"cmor{CWT_B}-{CWT_C}")
-            alpha_coefs = coefs[0:N_ALPHA, :]
-            gamma_coefs = coefs[N_ALPHA:, :]
+            #coefs, freqs = pywt.cwt(segment_channel, cwt_scales, f"cmor{CWT_B}-{CWT_C}")
+            #alpha_coefs = coefs[0:N_ALPHA, :]
+            #gamma_coefs = coefs[N_ALPHA:, :]
+            
+            #notch filter
+            b_notch, a_notch = iirnotch(w0=60 / (sampling_freq_hz / 2), Q=30)
+            segment_channel_notch = filtfilt(b_notch, a_notch, segment_channel)
+
+            #filter to the alpha and gamma ranges
+            b_alpha, a_alpha = butter(6, [ALPHA_FREQUENCIES[0] / (0.5 * sampling_freq_hz), ALPHA_FREQUENCIES[1] / (0.5 * sampling_freq_hz)], btype='band')
+            segment_channel_alpha = filtfilt(b_alpha, a_alpha, segment_channel_notch)
+            b_gamma, a_gamma = butter(6, [GAMMA_FREQUENCIES[0] / (0.5 * sampling_freq_hz), GAMMA_FREQUENCIES[1] / (0.5 * sampling_freq_hz)], btype='band')
+            segment_channel_gamma = filtfilt(b_gamma, a_gamma, segment_channel_notch)
 
             #extract alpha freq phases
-            #alpha_coefs, _ = pywt.cwt(data=segment_channel, scales=alpha_scales, wavelet=f"cmor{CWT_B}-{CWT_C}")
+            alpha_coefs, _ = pywt.cwt(data=segment_channel_alpha, scales=alpha_scales, wavelet=f"cmor{CWT_B}-{CWT_C}")
             phases = np.angle(alpha_coefs)
             assert((phases <= math.pi).all() and (phases >= -math.pi).all())
 
             #extract gamma freq amplitudes
-            #gamma_coefs, _ = pywt.cwt(data=segment_channel, scales=gamma_scales, wavelet=f"cmor{CWT_B}-{CWT_C}")
+            gamma_coefs, _ = pywt.cwt(data=segment_channel_gamma, scales=gamma_scales, wavelet=f"cmor{CWT_B}-{CWT_C}")
             amplitudes = np.abs(gamma_coefs)
 
             #phase binning
@@ -173,6 +217,9 @@ def process_epoch(global_epoch_id, is_healthy, epoch, n_segments, segment_length
             assert np.all((pac_mi >= 0) & (pac_mi <= 1))
             global_pac_mi += pac_mi
         global_pac_mi /= N_CHANNELS
+
+        #plot_segment(segment, sampling_freq_hz)
+        #plot_gpac(global_pac_mi, "CN" if is_healthy else "AD", subject_str, segment_id)
 
         #gradient
         grad_x = cv2.Sobel(global_pac_mi, cv2.CV_64F, dx=1, dy=0, ksize=3)  # Gradient in x-direction
@@ -223,8 +270,10 @@ def main():
 
         #inspect raw signals
         #subject_raw.plot(scalings="auto", show=True, block=True)
+        #temp_data = subject_raw.get_data()[:, 654*SAMPLING_FREQUENCY_HZ:687*SAMPLING_FREQUENCY_HZ]
+        #plot_segment(temp_data, SAMPLING_FREQUENCY_HZ)
 
-        #filtering
+        #filtering; NAH, using scipy now
         #subject_raw.notch_filter(freqs=[60])
         #subject_raw.filter(l_freq=None, h_freq=50)
 
@@ -240,7 +289,7 @@ def main():
             assert(epoch.shape == (N_CHANNELS, EPOCH_LENGTH_SAMPLES))
 
             #print("subject id: ", subject_id, "\tglobal epoch: ", global_epoch_id)
-            process_epoch(global_epoch_id, subject_group == "C", epoch, N_SEGMENTS, SEGMENT_LENGTH_SAMPLES, nemar_cwt_scales)
+            process_epoch(global_epoch_id, subject_group == "C", subject_str, epoch, N_SEGMENTS, SEGMENT_LENGTH_SAMPLES, nemar_alpha_scales, nemar_gamma_scales, SAMPLING_FREQUENCY_HZ)
             global_epoch_id += 1
     
 
@@ -259,8 +308,8 @@ def main():
         epoch = np.array(epoch)
         assert(epoch.shape == (N_CHANNELS, OSF_SAMPLE_LENGTH_SAMPLES))
 
-        print("alz id: ", alz_id)
-        process_epoch(global_epoch_id, False, epoch, OSF_N_SEGMENTS, OSF_SEGMENT_LENGTH_SAMPLES, osf_cwt_scales)
+        #print("alz id: ", alz_id)
+        process_epoch(global_epoch_id, False, "OSF", epoch, OSF_N_SEGMENTS, OSF_SEGMENT_LENGTH_SAMPLES, osf_alpha_scales, osf_gamma_scales, OSF_SAMPLING_FREQUENCY_HZ)
         global_epoch_id += 1
 
     for healthy_id in range(OSF_N_CN):
@@ -276,7 +325,7 @@ def main():
         epoch = np.array(epoch)
         assert(epoch.shape == (N_CHANNELS, OSF_SAMPLE_LENGTH_SAMPLES))
 
-        process_epoch(global_epoch_id, True, epoch, OSF_N_SEGMENTS, OSF_SEGMENT_LENGTH_SAMPLES, osf_cwt_scales)
+        process_epoch(global_epoch_id, True, "OSF", epoch, OSF_N_SEGMENTS, OSF_SEGMENT_LENGTH_SAMPLES, osf_alpha_scales, osf_gamma_scales, OSF_SAMPLING_FREQUENCY_HZ)
         global_epoch_id += 1
     
     end_time = time.time()
