@@ -25,7 +25,22 @@ def get_band_index(frequency):
     insertion_id = bisect.bisect_left(FREQUENCY_BANDS, frequency)
     return insertion_id - 1 if insertion_id > 0 else 0
 
+def plot_segment_fft(segment_fft_features):
+    plt.figure(figsize=(10, 8))  # Set the figure size
+    plt.imshow(segment_fft_features, cmap="coolwarm", aspect="auto")  # Display the array as an image
+
+    # Add a color bar
+    plt.colorbar(label="Value")
+
+    # Add labels and title
+    plt.title("Heatmap of 19x5 Array")
+    plt.xlabel("Columns")
+    plt.ylabel("Rows")
+    plt.show()
+
 def process_epoch(global_epoch_id, is_healthy, epoch, n_segments, segment_length_samples, sampling_period_seconds):
+    if global_epoch_id <= 200:
+        return
     epoch_fft_features = []
     
     for segment_id in range(n_segments):
@@ -64,14 +79,15 @@ def process_epoch(global_epoch_id, is_healthy, epoch, n_segments, segment_length
         segment_fft_features = np.array(segment_fft_features)
         assert(segment_fft_features.shape == (N_CHANNELS, N_FREQUENCY_BANDS))
         epoch_fft_features.append(segment_fft_features)
+        plot_segment_fft(segment_fft_features)
         
     epoch_fft_features = np.array(epoch_fft_features)
     assert(epoch_fft_features.shape == (n_segments, N_CHANNELS, N_FREQUENCY_BANDS))
 
     #store epoch features somewhere for later use
-    epoch_path = f"data/fft/fft_{global_epoch_id}_{'cn' if is_healthy else 'ad'}.npy"
-    np.save(epoch_path, epoch_fft_features)
-    print(f"saved {epoch_path}")
+    #epoch_path = f"data/fft/fft_{global_epoch_id}_{'cn' if is_healthy else 'ad'}.npy"
+    #np.save(epoch_path, epoch_fft_features)
+    #print(f"saved {epoch_path}")
 
 
 def main():

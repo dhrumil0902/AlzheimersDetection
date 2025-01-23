@@ -174,9 +174,11 @@ def interp(signal, sampling_freq, factor=2, filter_order=CFC_GAMMA_INTERP_LP_ORD
 
 #global_epoch_id is the epoch_id across both datasets, used for naming
 def process_epoch(global_epoch_id, is_healthy, subject_str, epoch, n_segments, segment_length_samples, alpha_scales, gamma_scales, sampling_freq):
-    if global_epoch_id <= 324:
+    if global_epoch_id <= 59:
         return
     gpac_grads = np.empty((0, N_ALPHA, N_GAMMA))
+
+    #TODO test with sine wave
     
     for segment_id in range(n_segments):
         start_sample = segment_id * segment_length_samples
