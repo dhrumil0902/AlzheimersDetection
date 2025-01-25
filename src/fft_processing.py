@@ -122,11 +122,11 @@ def main():
         subject_data = subject_raw.get_data()
         assert(subject_data.shape == (N_CHANNELS, int(SAMPLING_FREQUENCY * recording_duration)))
 
-        d_epoch_start_time_sec = (recording_duration - 2 * NEMAR_PADDING_LENGTH_SECONDS - EPOCH_LENGTH_SECONDS) / (N_EPOCHS - 1)
+        d_epoch_start_time_sec = (recording_duration - NEMAR_START_PADDING_LENGTH_SECONDS - EPOCH_LENGTH_SECONDS) / (N_EPOCHS - 1)
         d_epoch_start_time_sample = int(d_epoch_start_time_sec * SAMPLING_FREQUENCY)
 
         for epoch_id in range(N_EPOCHS):
-            start_sample = NEMAR_PADDING_LENGTH_SAMPLES + epoch_id * d_epoch_start_time_sample
+            start_sample = NEMAR_START_PADDING_LENGTH_SAMPLES + epoch_id * d_epoch_start_time_sample
             epoch = subject_data[:, start_sample : (start_sample + EPOCH_LENGTH_SAMPLES)]
             assert(epoch.shape == (N_CHANNELS, EPOCH_LENGTH_SAMPLES))
 

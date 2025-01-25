@@ -174,12 +174,16 @@ def interp(signal, sampling_freq, factor=2, filter_order=CFC_GAMMA_INTERP_LP_ORD
 
 #global_epoch_id is the epoch_id across both datasets, used for naming
 def process_epoch(global_epoch_id, is_healthy, subject_str, epoch, n_segments, segment_length_samples, alpha_scales, gamma_scales, sampling_freq):
+    '''
     if global_epoch_id <= 59:
         return
+    #TODO test with sine wave
+    '''
+    #if global_epoch_id != 55:
+    #    return
+    
     gpac_grads = np.empty((0, N_ALPHA, N_GAMMA))
 
-    #TODO test with sine wave
-    
     for segment_id in range(n_segments):
         start_sample = segment_id * segment_length_samples
         end_sample = start_sample + segment_length_samples #exclusive
@@ -249,8 +253,8 @@ def process_epoch(global_epoch_id, is_healthy, subject_str, epoch, n_segments, s
             global_pac_mi += pac_mi
         global_pac_mi /= N_CHANNELS
 
-        plot_segment(segment, sampling_freq)
-        plot_gpac(global_pac_mi, "CN" if is_healthy else "AD", subject_str, segment_id)
+        #plot_segment(segment, sampling_freq)
+        #plot_gpac(global_pac_mi, "CN" if is_healthy else "AD", subject_str, segment_id)
 
         #gradient
         grad_x = cv2.Sobel(global_pac_mi, cv2.CV_64F, dx=1, dy=0, ksize=3)  # Gradient in x-direction
@@ -266,9 +270,9 @@ def process_epoch(global_epoch_id, is_healthy, subject_str, epoch, n_segments, s
     assert(gpac_grads_standardized.shape == (n_segments, N_ALPHA, N_GAMMA))
 
     #store standardized gPAC gradient (with tag) somewhere for later use
-    #epoch_path = f"data/cfc/cfc_{global_epoch_id}_{'cn' if is_healthy else 'ad'}.npy"
-    #np.save(epoch_path, gpac_grads_standardized)
-    #print(f"saved {epoch_path}")
+    epoch_path = f"data/cfc_incorporating_sofya_fb/cfc_{global_epoch_id}_{'cn' if is_healthy else 'ad'}.npy"
+    np.save(epoch_path, gpac_grads_standardized)
+    print(f"saved {epoch_path}")
 
 
 def main():
@@ -311,11 +315,11 @@ def main():
         subject_data = subject_raw.get_data()
         assert(subject_data.shape == (N_CHANNELS, int(SAMPLING_FREQUENCY * recording_duration)))
 
-        d_epoch_start_time_sec = (recording_duration - 2 * NEMAR_PADDING_LENGTH_SECONDS - EPOCH_LENGTH_SECONDS) / (N_EPOCHS - 1)
+        d_epoch_start_time_sec = (recording_duration - NEMAR_START_PADDING_LENGTH_SECONDS - EPOCH_LENGTH_SECONDS) / (N_EPOCHS - 1)
         d_epoch_start_time_sample = int(d_epoch_start_time_sec * SAMPLING_FREQUENCY)
 
         for epoch_id in range(N_EPOCHS):
-            start_sample = NEMAR_PADDING_LENGTH_SAMPLES + epoch_id * d_epoch_start_time_sample
+            start_sample = NEMAR_START_PADDING_LENGTH_SAMPLES + epoch_id * d_epoch_start_time_sample
             epoch = subject_data[:, start_sample : (start_sample + EPOCH_LENGTH_SAMPLES)]
             assert(epoch.shape == (N_CHANNELS, EPOCH_LENGTH_SAMPLES))
 
@@ -323,7 +327,7 @@ def main():
             process_epoch(global_epoch_id, subject_group == "C", subject_str, epoch, N_SEGMENTS, SEGMENT_LENGTH_SAMPLES, nemar_alpha_scales, nemar_gamma_scales, SAMPLING_FREQUENCY)
             global_epoch_id += 1
     
-
+    '''
     #OSF Dataset
     for alz_id in range(OSF_N_AD):
         subject_path = f"../data/EEG_data/AD/Eyes_closed/Paciente{alz_id+1}/"
@@ -358,6 +362,7 @@ def main():
 
         process_epoch(global_epoch_id, True, "OSF", epoch, OSF_N_SEGMENTS, OSF_SEGMENT_LENGTH_SAMPLES, osf_alpha_scales, osf_gamma_scales, OSF_SAMPLING_FREQUENCY)
         global_epoch_id += 1
+    '''
     
     end_time = time.time()
     print(f"time spent: {end_time - start_time}")
