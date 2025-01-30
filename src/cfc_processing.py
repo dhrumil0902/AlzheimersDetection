@@ -171,6 +171,109 @@ def interp(signal, sampling_freq, factor=2, filter_order=CFC_GAMMA_INTERP_LP_ORD
     
     return filtered_signal
 
+'''
+def generate_synthetic_signal(
+    sampling_frequency,
+    duration_seconds,
+    alpha_frequency,
+    gamma_frequency,
+    modulation_depth=0.5
+):
+    """
+    Generate a synthetic EEG-like signal with PAC.
+
+    Parameters:
+    - sampling_frequency: int, Sampling frequency in Hz.
+    - duration_seconds: float, Duration of the signal in seconds.
+    - alpha_frequency: float, Frequency of the low-frequency phase component in Hz.
+    - gamma_frequency: float, Frequency of the high-frequency amplitude component in Hz.
+    - modulation_depth: float, Amplitude modulation depth (0 to 1).
+
+    Returns:
+    - signal: np.ndarray, Generated synthetic signal.
+    """
+    t = np.linspace(0, duration_seconds, int(sampling_frequency * duration_seconds), endpoint=False)
+
+    # Generate alpha phase signal
+    alpha_phase = np.sin(2 * np.pi * alpha_frequency * t)
+
+    # Modulate gamma amplitude
+    gamma_carrier = np.sin(2 * np.pi * gamma_frequency * t)
+    modulated_gamma = (1 + modulation_depth * alpha_phase) * gamma_carrier
+
+    return modulated_gamma
+
+def verify_cfc_script():
+    # Synthetic signal parameters
+    duration = 2  # seconds
+    sampling_frequency = SAMPLING_FREQUENCY # 500 Hz
+    alpha_frequency = 6  # Hz (in the alpha band)
+    gamma_frequency = 80  # Hz (in the gamma band)
+    modulation_depth = 0.5  # Depth of amplitude modulation
+
+    # Generate synthetic EEG-like signal
+    synthetic_signal = generate_synthetic_signal(
+        sampling_frequency, duration, alpha_frequency, gamma_frequency, modulation_depth
+    )
+
+    # Plot the synthetic signal
+    plt.figure(figsize=(10, 4))
+    plt.plot(np.linspace(0, duration, len(synthetic_signal)), synthetic_signal)
+    plt.title("Synthetic EEG-like Signal with PAC")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Amplitude")
+    plt.grid(True)
+    plt.show()
+
+    # Compute CWT scales for alpha and gamma bands
+    alpha_scales = get_cwt_scales(ALPHA_FREQUENCIES[0], ALPHA_FREQUENCIES[1], ALPHA_FREQUENCIES[2])
+    gamma_scales = get_cwt_scales(GAMMA_FREQUENCIES[0], GAMMA_FREQUENCIES[1], GAMMA_FREQUENCIES[2])
+
+    # Apply CWT to extract coefficients
+    alpha_coefs, _ = pywt.cwt(synthetic_signal, alpha_scales, f"cmor{CWT_B}-{CWT_C}", sampling_period=SAMPLING_PERIOD_SECONDS)
+    gamma_coefs, _ = pywt.cwt(synthetic_signal, gamma_scales, f"cmor{CWT_B}-{CWT_C}", sampling_period=SAMPLING_PERIOD_SECONDS)
+
+    # Extract phases (alpha) and amplitudes (gamma)
+    alpha_phase, _ = extract_phase_amplitude(alpha_coefs)
+    _, gamma_amplitude = extract_phase_amplitude(gamma_coefs)
+
+    # Ensure both arrays have the same time dimension
+    min_time_points = min(alpha_phase.shape[1], gamma_amplitude.shape[1])
+    alpha_phase = alpha_phase[:, :min_time_points]
+    gamma_amplitude = gamma_amplitude[:, :min_time_points]
+
+    # Initialize PAC matrix
+    pac_matrix = np.zeros((len(alpha_scales), len(gamma_scales)))
+
+    # Calculate PAC matrix
+    for a_idx, theta_phase in enumerate(alpha_phase):
+        for g_idx, gamma_amp in enumerate(gamma_amplitude):
+            pac_dist = calculate_pac(theta_phase, gamma_amp)
+            pac_matrix[a_idx, g_idx] = calculate_modulation_index(pac_dist)
+
+    # Flip PAC matrix for proper visualization
+    flipped_pac_matrix = np.flip(pac_matrix.T, axis=0)
+
+    # Plot PAC matrix
+    plt.figure(figsize=(8, 6))
+    plt.imshow(
+        flipped_pac_matrix,
+        extent=[ALPHA_FREQUENCIES[0], ALPHA_FREQUENCIES[1], GAMMA_FREQUENCIES[0], GAMMA_FREQUENCIES[1]],
+        aspect='auto',
+        origin='lower',
+        cmap='viridis'
+    )
+    plt.colorbar(label="PAC Modulation Index")
+    plt.title("PAC Matrix - Synthetic Signal")
+    plt.xlabel("Theta Phase Frequency (Hz)")
+    plt.ylabel("Gamma Amplitude Frequency (Hz)")
+    plt.show()
+
+    # Plot phases and amplitudes
+    plot_phases_and_amplitudes(alpha_phase, gamma_amplitude, alpha_scales, gamma_scales)
+
+    print("CFC script verification complete.")
+'''
 
 #global_epoch_id is the epoch_id across both datasets, used for naming
 def process_epoch(global_epoch_id, is_healthy, subject_str, epoch, n_segments, segment_length_samples, alpha_scales, gamma_scales, sampling_freq):
@@ -179,8 +282,6 @@ def process_epoch(global_epoch_id, is_healthy, subject_str, epoch, n_segments, s
         return
     #TODO test with sine wave
     '''
-    #if global_epoch_id != 55:
-    #    return
     
     gpac_grads = np.empty((0, N_ALPHA, N_GAMMA))
 
@@ -270,7 +371,7 @@ def process_epoch(global_epoch_id, is_healthy, subject_str, epoch, n_segments, s
     assert(gpac_grads_standardized.shape == (n_segments, N_ALPHA, N_GAMMA))
 
     #store standardized gPAC gradient (with tag) somewhere for later use
-    epoch_path = f"data/cfc_incorporating_sofya_fb/cfc_{global_epoch_id}_{'cn' if is_healthy else 'ad'}.npy"
+    epoch_path = f"data/cfc_heavyweight/cfc_{global_epoch_id}_{'cn' if is_healthy else 'ad'}.npy"
     np.save(epoch_path, gpac_grads_standardized)
     print(f"saved {epoch_path}")
 
