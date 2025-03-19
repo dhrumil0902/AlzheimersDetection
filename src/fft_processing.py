@@ -85,9 +85,9 @@ def process_epoch(global_epoch_id, is_healthy, epoch, n_segments, segment_length
     assert(epoch_fft_features.shape == (n_segments, N_CHANNELS, N_FREQUENCY_BANDS))
 
     #store epoch features somewhere for later use
-    #epoch_path = f"data/fft/fft_{global_epoch_id}_{'cn' if is_healthy else 'ad'}.npy"
-    #np.save(epoch_path, epoch_fft_features)
-    #print(f"saved {epoch_path}")
+    epoch_path = f"data/fft/fft_{global_epoch_id}_{'cn' if is_healthy else 'ad'}.npy"
+    np.save(epoch_path, epoch_fft_features)
+    print(f"saved {epoch_path}")
 
 
 def main():

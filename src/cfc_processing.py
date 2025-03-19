@@ -365,7 +365,7 @@ def process_epoch(global_epoch_id, is_healthy, subject_str, epoch, n_segments, s
         assert(grad.shape == (N_ALPHA, N_GAMMA))
         gpac_grads = np.concatenate((gpac_grads, grad[np.newaxis, :, :]), axis=0)
 
-    #standardization across all grac gradients
+    #standardization across all gpac gradients
     gpac_grad_mean = np.mean(gpac_grads)
     gpac_grad_std = np.std(gpac_grads)
     gpac_grads_standardized = (gpac_grads - gpac_grad_mean) / gpac_grad_std
@@ -426,7 +426,8 @@ def main():
             assert(epoch.shape == (N_CHANNELS, EPOCH_LENGTH_SAMPLES))
 
             #print("subject id: ", subject_id, "\tglobal epoch: ", global_epoch_id)
-            process_epoch(global_epoch_id, subject_group == "C", subject_str, epoch, N_SEGMENTS, SEGMENT_LENGTH_SAMPLES, nemar_alpha_scales, nemar_gamma_scales, SAMPLING_FREQUENCY)
+            if global_epoch_id >= 800:
+                process_epoch(global_epoch_id, subject_group == "C", subject_str, epoch, N_SEGMENTS, SEGMENT_LENGTH_SAMPLES, nemar_alpha_scales, nemar_gamma_scales, SAMPLING_FREQUENCY)
             global_epoch_id += 1
     
     '''
