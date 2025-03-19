@@ -277,8 +277,9 @@ def verify_cfc_script():
 
 #global_epoch_id is the epoch_id across both datasets, used for naming
 def process_epoch(global_epoch_id, is_healthy, subject_str, epoch, n_segments, segment_length_samples, alpha_scales, gamma_scales, sampling_freq):
+    
     '''
-    if global_epoch_id <= 59:
+    if global_epoch_id <= 324:
         return
     #TODO test with sine wave
     '''
@@ -286,7 +287,7 @@ def process_epoch(global_epoch_id, is_healthy, subject_str, epoch, n_segments, s
     gpac_grads = np.empty((0, N_ALPHA, N_GAMMA))
 
     for segment_id in range(n_segments):
-        start_sample = segment_id * segment_length_samples
+        start_sample = segment_id * STEP_LENGTH_SAMPLES
         end_sample = start_sample + segment_length_samples #exclusive
         segment = epoch[:, start_sample:end_sample]
         #print("global epoch: ", global_epoch_id, "\tsegment id: ", segment_id, "\tsegment shape: ", segment.shape)
@@ -371,7 +372,7 @@ def process_epoch(global_epoch_id, is_healthy, subject_str, epoch, n_segments, s
     assert(gpac_grads_standardized.shape == (n_segments, N_ALPHA, N_GAMMA))
 
     #store standardized gPAC gradient (with tag) somewhere for later use
-    epoch_path = f"data/cfc_heavyweight/cfc_{global_epoch_id}_{'cn' if is_healthy else 'ad'}.npy"
+    epoch_path = f"data/cfc_overlap/cfc_{global_epoch_id}_{'cn' if is_healthy else 'ad'}.npy"
     np.save(epoch_path, gpac_grads_standardized)
     print(f"saved {epoch_path}")
 
